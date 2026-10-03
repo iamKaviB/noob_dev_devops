@@ -187,25 +187,55 @@ starts `backend`, waits until it is healthy, and then starts `frontend`.
 ./deploy.sh all          # force both
 ```
 
-### CI/CD (GitHub Actions)
+### CI/CD: Docker → GitHub Actions → AWS ECR → AWS EC2
 
 `.github/workflows/ci-cd.yml` does the same thing as `deploy.sh`, but on GitHub on every push:
 
+```
+git push (dev) ──► GitHub Actions ──► build changed image(s) ──► push to ECR ──► SSH to EC2 ──► pull + restart changed service(s)
+```
+
 | Event | What runs |
 |---|---|
-| Pull request to `main` | Build only the changed image(s), to check the Dockerfiles still work |
-| Push to `main` | Build + push changed image(s) to `ghcr.io/<owner>/<repo>/backend` / `frontend`, then deploy |
+| Pull request to `dev` | Build only the changed image(s), to check the Dockerfiles still work. Nothing is pushed. |
+| Push to `dev` | Build the changed image(s), push them to ECR (`noob-dev/backend`, `noob-dev/frontend`), deploy to EC2 |
 | Actions tab → "Run workflow" | Rebuild and deploy everything |
 
-The **deploy** step is skipped until you configure a server. In GitHub → Settings →
-Secrets and variables → Actions, add:
+#### One-time AWS setup
 
-- **Variables:** `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH` (for example `/opt/noob-dev`)
-- **Secrets:** `DEPLOY_SSH_KEY` (private SSH key), `GHCR_TOKEN` (a GitHub token with `read:packages`)
+**1. EC2 instance** (Amazon Linux 2023 or Ubuntu)
+- Install Docker and the Compose plugin. The AWS CLI is already installed on Amazon Linux.
+- Security group: allow inbound **22** (SSH) and **3000** (the app). Add **8080** only if you want to reach the API directly.
+- Attach an **IAM role** with the managed policy `AmazonEC2ContainerRegistryReadOnly`.
+  This lets EC2 pull from ECR without any keys stored on it.
 
-The server needs Docker installed. The deploy job copies `docker-compose.yml` and
-`docker-compose.prod.yml` there, then pulls the new images instead of building them,
-and restarts **only** the services that changed.
+**2. AWS access for GitHub**, choose one:
+- **OIDC role (recommended, no stored keys):** add GitHub as an identity provider in IAM
+  (`token.actions.githubusercontent.com`), then create a role that trusts your repo and has
+  `AmazonEC2ContainerRegistryPowerUser`. Put its ARN in the `AWS_ROLE_ARN` variable.
+- **Access keys:** create an IAM user with `AmazonEC2ContainerRegistryPowerUser` and store
+  its keys as secrets.
+
+The ECR repositories are created automatically on the first push. To allow that, the
+role or user also needs `ecr:CreateRepository`.
+
+**3. GitHub → Settings → Secrets and variables → Actions**
+
+| Kind | Name | Example |
+|---|---|---|
+| Variable | `AWS_REGION` | `ap-south-1` |
+| Variable | `EC2_HOST` | `13.233.10.20` (public IP or DNS of the EC2 instance) |
+| Variable | `EC2_USER` | `ec2-user` (Amazon Linux) or `ubuntu` |
+| Variable | `EC2_PATH` | `/home/ec2-user/noob-dev` |
+| Variable | `AWS_ROLE_ARN` | *(OIDC only)* `arn:aws:iam::123456789012:role/github-actions` |
+| Variable | `ECR_REPO_PREFIX` | *(optional)* defaults to `noob-dev` |
+| Secret | `EC2_SSH_KEY` | contents of your `.pem` key file |
+| Secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | *(access-key option only)* |
+
+The deploy step is skipped until `EC2_HOST` is set. It copies `docker-compose.yml` and
+`docker-compose.prod.yml` to EC2. The prod file swaps "build from source" for "pull from
+ECR". The database runs on EC2 as well, in its `db-data` volume. To change its passwords,
+edit `.env` in `EC2_PATH` on the server.
 
 ### Everyday commands
 

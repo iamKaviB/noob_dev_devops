@@ -4,9 +4,10 @@
 # Compose merges this file on top of docker-compose.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
-# Difference from local: instead of BUILDING images from source, the server
-# PULLS the images that GitHub Actions already built and pushed to ghcr.io.
-# IMAGE_PREFIX is set by the deploy job (e.g. ghcr.io/iamkavib/noob_dev_devops).
+# Difference from local: instead of BUILDING images from source, EC2
+# PULLS the images that GitHub Actions already built and pushed to AWS ECR.
+# IMAGE_PREFIX is set by the deploy job
+# (e.g. 123456789012.dkr.ecr.ap-south-1.amazonaws.com/noob-dev).
 # =============================================================================
 
 services:
