@@ -42,12 +42,19 @@ env:
 jobs:
   # ---------------------------------------------------------------------------
   # changes: decide what needs building (like the fingerprint check in deploy.sh)
+  #   A service is built when ANY of these is true:
+  #     - its folder changed in this push
+  #     - the workflow was started by hand ("Run workflow")
+  #     - FIRST DEPLOY: its image doesn't exist in ECR yet
   # ---------------------------------------------------------------------------
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # for the OIDC login used by the first-deploy check
     outputs:
-      backend: ${{ steps.filter.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
-      frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch' }}
+      backend: ${{ steps.filter.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' || steps.first.outputs.backend == 'true' }}
+      frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch' || steps.first.outputs.frontend == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -58,6 +65,32 @@ jobs:
               - 'DockerBackend/**'
             frontend:
               - 'DockerFe/**'
+
+      # The first-deploy check needs AWS, so it only runs on real pushes.
+      - name: Configure AWS credentials
+        if: env.PUBLISH == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID || '' }}
+          aws-secret-access-key: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
+
+      # No "latest" image in ECR (or no repository at all) → this service has
+      # never been deployed → build + deploy it even if its code didn't change.
+      - name: First deploy? (image missing from ECR)
+        id: first
+        if: env.PUBLISH == 'true'
+        run: |
+          for s in backend frontend; do
+            if aws ecr describe-images --repository-name "$REPO_PREFIX/$s" \
+                 --image-ids imageTag=latest >/dev/null 2>&1; then
+              echo "$s=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::$s has no image in ECR yet → first deploy, building it"
+              echo "$s=true" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
   # ---------------------------------------------------------------------------
   # build: one job definition, run once per changed service (matrix)
