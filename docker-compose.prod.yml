@@ -1,0 +1,19 @@
+# =============================================================================
+# docker-compose.prod.yml — used on the SERVER by the CI/CD deploy job.
+#
+# Compose merges this file on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Difference from local: instead of BUILDING images from source, the server
+# PULLS the images that GitHub Actions already built and pushed to ghcr.io.
+# IMAGE_PREFIX is set by the deploy job (e.g. ghcr.io/iamkavib/noob_dev_devops).
+# =============================================================================
+
+services:
+  backend:
+    image: ${IMAGE_PREFIX}/backend:latest
+    pull_policy: always
+
+  frontend:
+    image: ${IMAGE_PREFIX}/frontend:latest
+    pull_policy: always

@@ -187,6 +187,26 @@ starts `backend`, waits until it is healthy, and then starts `frontend`.
 ./deploy.sh all          # force both
 ```
 
+### CI/CD (GitHub Actions)
+
+`.github/workflows/ci-cd.yml` does the same thing as `deploy.sh`, but on GitHub on every push:
+
+| Event | What runs |
+|---|---|
+| Pull request to `main` | Build only the changed image(s), to check the Dockerfiles still work |
+| Push to `main` | Build + push changed image(s) to `ghcr.io/<owner>/<repo>/backend` / `frontend`, then deploy |
+| Actions tab → "Run workflow" | Rebuild and deploy everything |
+
+The **deploy** step is skipped until you configure a server. In GitHub → Settings →
+Secrets and variables → Actions, add:
+
+- **Variables:** `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH` (for example `/opt/noob-dev`)
+- **Secrets:** `DEPLOY_SSH_KEY` (private SSH key), `GHCR_TOKEN` (a GitHub token with `read:packages`)
+
+The server needs Docker installed. The deploy job copies `docker-compose.yml` and
+`docker-compose.prod.yml` there, then pulls the new images instead of building them,
+and restarts **only** the services that changed.
+
 ### Everyday commands
 
 | Command | What it does |
