@@ -1,0 +1,16 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 640px;
+  margin: 40px auto;
+  padding: 0 16px;
+  color: #222;
+}
+
+.status-up { color: green; }
+.status-down { color: crimson; }
+
+form { display: flex; gap: 8px; margin: 16px 0; }
+input { flex: 1; padding: 8px; }
+button { padding: 8px 16px; cursor: pointer; }
+
+li { padding: 6px 0; border-bottom: 1px solid #eee; }

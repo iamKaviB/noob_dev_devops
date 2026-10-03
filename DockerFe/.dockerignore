@@ -1,0 +1,29 @@
+# .dockerignore — files Docker should NOT send to the build.
+#
+# Why it matters: `docker build .` first uploads the whole folder (the "build
+# context") to the Docker engine. Ignoring junk here:
+#   - makes builds faster (node_modules alone can be hundreds of MB),
+#   - prevents your Mac/Windows node_modules from overwriting the Linux ones
+#     the image installs itself (some packages contain OS-specific binaries),
+#   - keeps secrets (.env) and local build output out of the image.
+
+# Dependencies and build output — the image creates its own
+node_modules
+.next
+out
+
+# Version control and editor files
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Secrets, logs and docs
+.env*
+npm-debug.log*
+*.md
+
+# The Dockerfile itself doesn't need to be inside the context
+Dockerfile
+.dockerignore
