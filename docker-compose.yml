@@ -1,0 +1,140 @@
+# =============================================================================
+# docker-compose.yml — runs the whole app (database + backend + frontend)
+#
+#   docker compose up --build     build images and start everything
+#   docker compose down           stop and remove the containers (data is kept)
+#   docker compose down -v        ...and ALSO delete the database volume
+#
+# ${VAR} values come from the .env file next to this file (copy .env.example).
+# ${VAR:-default} uses "default" if VAR isn't set, so it works even without .env.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # db: MySQL database
+  # ---------------------------------------------------------------------------
+  db:
+    # No Dockerfile needed — we use the official image from Docker Hub as-is.
+    image: mysql:8.4
+
+    # The official MySQL image reads these on FIRST start (empty volume) to create
+    # the root password, a database, and a normal user with access to it.
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${DB_NAME:-messages_db}
+      MYSQL_USER: ${DB_USER:-app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-app_password}
+
+    # VOLUMES: a container's filesystem is thrown away when the container is removed.
+    # Mounting the named volume "db-data" at MySQL's data folder stores the data
+    # OUTSIDE the container, so messages survive `docker compose down`.
+    # (`docker compose down -v` deletes the volume → fresh, empty database.)
+    volumes:
+      - db-data:/var/lib/mysql
+
+    # PORTS vs EXPOSE: we publish NO ports for the db. The backend reaches it over
+    # the internal Docker network on port 3306, which needs no publishing at all.
+    # Publishing ("ports:") only matters for access from YOUR computer. Add
+    # `ports: ["3306:3306"]` if you want to connect with a desktop SQL client.
+
+    # HEALTHCHECK: Docker runs this command periodically. Once it succeeds the
+    # container is "healthy". The backend waits for that (see depends_on below).
+    # -h 127.0.0.1 forces a TCP connection, which only works once MySQL has fully
+    # finished its first-time setup. ($$ escapes $ so the CONTAINER expands it.)
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # ---------------------------------------------------------------------------
+  # backend: Spring Boot API
+  # ---------------------------------------------------------------------------
+  backend:
+    # Build the image from DockerBackend/Dockerfile instead of pulling one.
+    build:
+      context: ./DockerBackend
+
+    # SERVICE DISCOVERY: DB_HOST is "db" — the service name above. On a compose
+    # network, Docker's built-in DNS resolves each service name to that container's
+    # IP. Never use "localhost" here: inside a container, localhost is the
+    # container ITSELF, not your computer and not the db container.
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-messages_db}
+      DB_USER: ${DB_USER:-app}
+      DB_PASSWORD: ${DB_PASSWORD:-app_password}
+
+    # DEPENDS_ON controls start ORDER. Plain `depends_on: [db]` only waits for the db
+    # container to START, but MySQL needs a while before it accepts connections.
+    # `condition: service_healthy` waits until db's healthcheck passes.
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # PORTS: "HOST:CONTAINER". Publishes container port 8080 on your computer's
+    # port 8080, so you can open http://localhost:8080/api/health in a browser.
+    # (EXPOSE in the Dockerfile is only documentation; `ports` actually opens it.)
+    ports:
+      - "8080:8080"
+
+    # Spring Boot Actuator's /actuator/health reports UP only when the app AND its
+    # database connection are fine. The frontend waits for this.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+    # Restart automatically if it crashes (or Docker restarts), unless YOU stopped it.
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # ---------------------------------------------------------------------------
+  # frontend: Next.js app
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./DockerFe
+      # Next.js bakes its /api rewrite into the build, so BACKEND_URL is passed as a
+      # BUILD argument (see ARG in DockerFe/Dockerfile). "backend" = service name.
+      args:
+        BACKEND_URL: http://backend:8080
+
+    # Also set at runtime for consistency (and so it's visible in `docker compose exec frontend env`).
+    environment:
+      BACKEND_URL: http://backend:8080
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    # Open http://localhost:3000 in your browser. The browser only ever talks to
+    # this port; the frontend server forwards /api/* to the backend over the network.
+    ports:
+      - "3000:3000"
+
+    restart: unless-stopped
+    networks:
+      - app-network
+
+# NETWORKS: a user-defined bridge network. All three services join it, so they can
+# reach each other by service name (db, backend, frontend). Containers outside this
+# network can't talk to them. (Compose would create a default network anyway, but
+# declaring it makes the idea visible.)
+networks:
+  app-network:
+    driver: bridge
+
+# Named volumes are managed by Docker. List them with `docker volume ls`.
+volumes:
+  db-data:

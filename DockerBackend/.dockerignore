@@ -1,0 +1,32 @@
+# .dockerignore — files Docker should NOT send to the build.
+#
+# Why it matters: `docker build .` first uploads the whole folder (the "build
+# context") to the Docker engine. Ignoring junk here:
+#   - makes builds faster (less to upload),
+#   - keeps images small and free of secrets (.env) or local build output,
+#   - avoids breaking layer caching because some irrelevant file changed.
+
+# Maven build output — the image builds its own jar, so never send ours
+target/
+
+# Version control and IDE files
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+*.iml
+.DS_Store
+
+# The Maven wrapper isn't needed: the build stage uses an image with Maven installed
+.mvn
+mvnw
+mvnw.cmd
+
+# Secrets and docs
+.env
+*.md
+
+# The Dockerfile itself doesn't need to be inside the context
+Dockerfile
+.dockerignore

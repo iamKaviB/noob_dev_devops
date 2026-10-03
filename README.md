@@ -178,6 +178,15 @@ docker compose up --build     # build images, create network + volume, start in 
 Open http://localhost:3000. Compose starts `db`, waits until it is **healthy**, then
 starts `backend`, waits until it is healthy, and then starts `frontend`.
 
+### Redeploy only what you changed
+
+```bash
+./deploy.sh              # auto: rebuilds backend, frontend, or both — whatever changed
+./deploy.sh backend      # force backend only
+./deploy.sh frontend     # force frontend only
+./deploy.sh all          # force both
+```
+
 ### Everyday commands
 
 | Command | What it does |

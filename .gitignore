@@ -1,0 +1,15 @@
+# Secrets — copy .env.example to .env, never commit .env
+.env
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Build output and dependencies (Docker builds its own inside the image)
+DockerBackend/target/
+DockerFe/node_modules/
+DockerFe/.next/
+DockerFe/my-next-app/
+.deploy-state/

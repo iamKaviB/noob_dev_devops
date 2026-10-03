@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: DockerBackend
+
+  # ${NAME:default} means: use the environment variable NAME if it is set,
+  # otherwise fall back to the default after the colon.
+  # Running locally (mvnw spring-boot:run) → the defaults point at localhost.
+  # Running in Docker Compose → compose sets DB_HOST=db (the service name).
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:messages_db}?allowPublicKeyRetrieval=true&useSSL=false
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app_password}
+
+  jpa:
+    # Let Hibernate create/update the "messages" table for us. Fine for a lesson,
+    # not what you'd use in production (you'd use Flyway/Liquibase migrations).
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+management:
+  endpoint:
+    health:
+      # /actuator/health also reports whether the database connection works.
+      show-details: always
