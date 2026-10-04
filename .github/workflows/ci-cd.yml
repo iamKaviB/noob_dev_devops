@@ -121,7 +121,7 @@ jobs:
             REGISTRY="${{ steps.ecr.outputs.registry }}"
             export IMAGE_PREFIX="$REGISTRY/${{ env.REPO_PREFIX }}"
             echo "$ECR_PASSWORD" | sudo docker login --username AWS --password-stdin "$REGISTRY"
-            COMPOSE="sudo -E docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+            COMPOSE="sudo IMAGE_PREFIX=$IMAGE_PREFIX docker compose -f docker-compose.yml -f docker-compose.prod.yml"
             $COMPOSE pull
             $COMPOSE up -d
             sudo docker image prune -f
