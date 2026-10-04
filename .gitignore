@@ -13,3 +13,5 @@ DockerFe/node_modules/
 DockerFe/.next/
 DockerFe/my-next-app/
 .deploy-state/
+
+*.pem

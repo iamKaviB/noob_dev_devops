@@ -86,22 +86,42 @@ jobs:
           source: docker-compose.yml,docker-compose.prod.yml,.env.example
           target: ${{ env.EC2_PATH }}
 
-      # On EC2, `aws ecr get-login-password` uses the instance's IAM role.
+      # Get the ECR login here (the runner has AWS credentials) and pass it to EC2,
+      # so the server needs neither the AWS CLI nor an IAM role.
+      - name: Get ECR password
+        run: |
+          PW=$(aws ecr get-login-password)
+          echo "::add-mask::$PW"
+          echo "ECR_PASSWORD=$PW" >> "$GITHUB_ENV"
+
       - name: Pull from ECR and restart
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_PASSWORD
           script: |
             set -e
+            # First deploy: install Docker + Compose if the server doesn't have them.
+            if ! command -v docker >/dev/null || ! sudo docker compose version >/dev/null 2>&1; then
+              if command -v apt-get >/dev/null; then
+                curl -fsSL https://get.docker.com | sudo sh
+              else
+                sudo dnf install -y docker || sudo yum install -y docker
+                sudo mkdir -p /usr/local/lib/docker/cli-plugins
+                sudo curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+                  -o /usr/local/lib/docker/cli-plugins/docker-compose
+                sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+              fi
+              sudo systemctl enable --now docker
+            fi
             cd "${{ env.EC2_PATH }}"
             [ -f .env ] || cp .env.example .env
             REGISTRY="${{ steps.ecr.outputs.registry }}"
             export IMAGE_PREFIX="$REGISTRY/${{ env.REPO_PREFIX }}"
-            aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
-              | docker login --username AWS --password-stdin "$REGISTRY"
-            COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+            echo "$ECR_PASSWORD" | sudo docker login --username AWS --password-stdin "$REGISTRY"
+            COMPOSE="sudo -E docker compose -f docker-compose.yml -f docker-compose.prod.yml"
             $COMPOSE pull
             $COMPOSE up -d
-            docker image prune -f
+            sudo docker image prune -f
