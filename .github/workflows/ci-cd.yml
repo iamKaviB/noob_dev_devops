@@ -1,21 +1,13 @@
 # =============================================================================
 # .github/workflows/ci-cd.yml — Docker → GitHub Actions → AWS ECR → AWS EC2
 #
-#   changes   → which folder changed? DockerBackend/, DockerFe/, or both
-#   backend   → build the backend image, push to ECR   (only if DockerBackend/ changed)
-#   frontend  → lint + build the frontend image, push to ECR (only if DockerFe/ changed)
-#   deploy    → SSH into EC2, pull from ECR, restart ONLY the services that were rebuilt
+# Every push to main (or "Run workflow"):
+#   build   → build backend + frontend images, push both to ECR
+#   deploy  → SSH into EC2, pull the new images, restart everything
 #
-# Pull request → dev:  build only (CI). Nothing is pushed or deployed.
-# Push to dev:         build + push to ECR + deploy to EC2.
-# "Run workflow":      rebuild + deploy everything.
-#
-# Setup (GitHub → Settings → Secrets and variables → Actions) — see README "CI/CD":
-#   Variables: (none required)
-#              AWS_ROLE_ARN        (optional — use OIDC instead of access keys)
-#              ECR_REPO_PREFIX     (optional — default "noob-dev")
-#   Secrets:   AWS_REGION, EC2_HOST, EC2_USER, EC2_SSH_KEY
-#              AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (only if not using AWS_ROLE_ARN)
+# Secrets (GitHub → Settings → Secrets and variables → Actions):
+#   AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   EC2_HOST, EC2_USER, EC2_SSH_KEY
 # =============================================================================
 
 name: CI/CD
@@ -23,191 +15,68 @@ name: CI/CD
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-
-# A newer push to the same branch cancels the older, still-running pipeline.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   # Folder on the EC2 server where the app is deployed (e.g. /home/ubuntu/app).
   EC2_PATH: /home/${{ secrets.EC2_USER }}/app
-  # ECR repositories become <prefix>/backend and <prefix>/frontend
-  REPO_PREFIX: ${{ vars.ECR_REPO_PREFIX || 'noob-dev' }}
-  # Only push/deploy on real pushes, never for pull requests.
-  PUBLISH: ${{ github.event_name != 'pull_request' }}
+  # ECR repositories are noob-dev/backend and noob-dev/frontend
+  REPO_PREFIX: noob-dev
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # changes: decide what needs building (like the fingerprint check in deploy.sh)
-  #   A service is built when ANY of these is true:
-  #     - its folder changed in this push
-  #     - the workflow was started by hand ("Run workflow")
-  #     - FIRST DEPLOY: its image doesn't exist in ECR yet
-  # ---------------------------------------------------------------------------
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write   # for the OIDC login used by the first-deploy check
-    outputs:
-      backend: ${{ steps.filter.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' || steps.first.outputs.backend == 'true' }}
-      frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch' || steps.first.outputs.frontend == 'true' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            backend:
-              - 'DockerBackend/**'
-            frontend:
-              - 'DockerFe/**'
-
-      # The first-deploy check needs AWS, so it only runs on real pushes.
-      - name: Configure AWS credentials
-        if: env.PUBLISH == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-access-key-id: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID || '' }}
-          aws-secret-access-key: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
-
-      # No "latest" image in ECR (or no repository at all) → this service has
-      # never been deployed → build + deploy it even if its code didn't change.
-      - name: First deploy? (image missing from ECR)
-        id: first
-        if: env.PUBLISH == 'true'
-        run: |
-          for s in backend frontend; do
-            if aws ecr describe-images --repository-name "$REPO_PREFIX/$s" \
-                 --image-ids imageTag=latest >/dev/null 2>&1; then
-              echo "$s=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "::notice::$s has no image in ECR yet → first deploy, building it"
-              echo "$s=true" >> "$GITHUB_OUTPUT"
-            fi
-          done
-
-  # ---------------------------------------------------------------------------
-  # build: one job definition, run once per changed service (matrix)
-  # ---------------------------------------------------------------------------
   build:
-    needs: changes
-    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write   # lets GitHub log in to AWS with OIDC (no stored keys)
     strategy:
-      fail-fast: false
       matrix:
         service: [backend, frontend]
         include:
           - service: backend
             context: ./DockerBackend
-            changed: ${{ needs.changes.outputs.backend }}
           - service: frontend
             context: ./DockerFe
-            changed: ${{ needs.changes.outputs.frontend }}
     steps:
-      # Matrix entries can't be skipped with `if:` on the job, so each step checks
-      # matrix.changed instead. An unchanged service finishes instantly as a no-op.
       - uses: actions/checkout@v4
-        if: matrix.changed == 'true'
 
-      - name: Lint frontend
-        if: matrix.changed == 'true' && matrix.service == 'frontend'
-        working-directory: DockerFe
-        run: |
-          npm ci
-          npm run lint
-
-      # Uses AWS_ROLE_ARN (OIDC) if set, otherwise the access-key secrets.
-      - name: Configure AWS credentials
-        if: matrix.changed == 'true' && env.PUBLISH == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-access-key-id: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID || '' }}
-          aws-secret-access-key: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Log in to Amazon ECR
         id: ecr
-        if: matrix.changed == 'true' && env.PUBLISH == 'true'
         uses: aws-actions/amazon-ecr-login@v2
 
-      # First run: create the ECR repository if it doesn't exist yet.
-      - name: Ensure ECR repository exists
-        if: matrix.changed == 'true' && env.PUBLISH == 'true'
-        run: |
-          REPO="$REPO_PREFIX/${{ matrix.service }}"
-          aws ecr describe-repositories --repository-names "$REPO" >/dev/null 2>&1 \
-            || aws ecr create-repository --repository-name "$REPO" --image-scanning-configuration scanOnPush=true
+      # Creates the repository on the first run; does nothing if it already exists.
+      - name: Create ECR repository
+        run: aws ecr create-repository --repository-name "$REPO_PREFIX/${{ matrix.service }}" || true
 
-      - uses: docker/setup-buildx-action@v3
-        if: matrix.changed == 'true'
-
-      # Builds the service's Dockerfile. "cache: gha" keeps Docker's layer cache
-      # between runs, so dependency layers are reused (see README section 4).
-      - name: Build (and push to ECR)
-        if: matrix.changed == 'true'
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           build-args: |
             BACKEND_URL=http://backend:8080
-          push: ${{ env.PUBLISH == 'true' }}
-          tags: |
-            ${{ steps.ecr.outputs.registry || 'local' }}/${{ env.REPO_PREFIX }}/${{ matrix.service }}:latest
-            ${{ steps.ecr.outputs.registry || 'local' }}/${{ env.REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.REPO_PREFIX }}/${{ matrix.service }}:latest
 
-  # ---------------------------------------------------------------------------
-  # deploy: SSH into EC2, pull the new images from ECR, restart only those services
-  # Needs the EC2_HOST, EC2_USER and EC2_SSH_KEY secrets.
-  # ---------------------------------------------------------------------------
   deploy:
-    needs: [changes, build]
-    if: >-
-      github.event_name != 'pull_request' &&
-      needs.build.result == 'success'
+    needs: build
     runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-access-key-id: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID || '' }}
-          aws-secret-access-key: ${{ vars.AWS_ROLE_ARN == '' && secrets.AWS_SECRET_ACCESS_KEY || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Get ECR registry address
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Work out which services to restart
-        id: svc
-        run: |
-          s=""
-          [ "${{ needs.changes.outputs.backend }}" = "true" ]  && s="$s backend"
-          [ "${{ needs.changes.outputs.frontend }}" = "true" ] && s="$s frontend"
-          echo "list=$s" >> "$GITHUB_OUTPUT"
-
-      # Copy the compose files to EC2 (they may have changed too).
       - name: Copy compose files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -217,9 +86,8 @@ jobs:
           source: docker-compose.yml,docker-compose.prod.yml,.env.example
           target: ${{ env.EC2_PATH }}
 
-      # On EC2, `aws ecr get-login-password` uses the instance's IAM role,
-      # so no AWS keys are stored on the server.
-      - name: Pull from ECR and restart changed services
+      # On EC2, `aws ecr get-login-password` uses the instance's IAM role.
+      - name: Pull from ECR and restart
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -234,7 +102,6 @@ jobs:
             aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
               | docker login --username AWS --password-stdin "$REGISTRY"
             COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
-            $COMPOSE pull ${{ steps.svc.outputs.list }}
-            $COMPOSE up -d --no-deps --wait ${{ steps.svc.outputs.list }}
-            $COMPOSE up -d --wait          # start anything not running yet (first deploy)
-            docker image prune -f          # remove old, now-unused image versions
+            $COMPOSE pull
+            $COMPOSE up -d
+            docker image prune -f
